@@ -1,0 +1,151 @@
+#!/bin/bash
+#SBATCH --job-name=gtex_depth_metrics
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+#SBATCH --time=08:00:00
+#SBATCH --output=logs/gtex_depth_%A_%a.out
+#SBATCH --error=logs/gtex_depth_%A_%a.err
+
+#talk about: time, memory, and cpus, beds, sample names and locations
+#script assumes there is a list of crams/bams named bam.list with the sammples of interest...
+#I have a list of gtex samples but I do not know how they are named as bam files or where they are on SOL storage 
+
+#Normalized read depth for gene of interest (TSPY1) --> running one job per sample
+#testing script on one/first bam in bam.list: sbatch --array=1-1 normalized_depth.sbatch
+
+set -euo pipefail
+
+# ----------------------------
+# INPUTS 
+# ----------------------------
+
+#1 Input list of crams (one CRAM path per line)
+CRAM_LIST="/path/to/cram.list"
+#should be one per line in this file / refer to gtex sample list 
+
+#2 Reference FASTA used for the CRAMs in samtools 
+REF_FASTA="/path/to/GRCh38_full_analysis_set_plus_decoy_hla.fa" #make sure .fai is there too in same location
+[ -f "${REF_FASTA}.fai" ] || { echo "ERROR: Missing ${REF_FASTA}.fai"; exit 1; }
+
+#3 Folder with output tsvs / one per sample to combine later 
+OUTPUT_DIR="depth_outputs"
+
+#4 Bed files on HG38 Coordinates (can be any BED file with regions or gene of interest))
+BED_TSPY1="/path/to/tspy1_grch38.bed" 
+BED_DDX3Y="/path/to/ddx3y_grch38.bed"
+BED_AUTOSOMES="/path/to/autosomes_chr1_22.bed"
+BED_XDR_WIN="/path/to/GRCh38.win.bed"
+XDR_MIN_MQ=20 #Mark applied this quality for this method, so we should too 
+
+#5 Load modules (edit to match SOL version that is in use)
+#module purge (unsure if needed)
+module load samtools 
+
+# ----------------------------
+# Setup to calculate mean depth across tspy1 for each sample and each normalization strategy (ddx3y, autosomes, mapped reads, xdr)
+#running one job per sample using SLURM array jobs, and then we or I can combine the outputs into a single table later.
+# ----------------------------
+
+mkdir -p "$OUTPUT_DIR" logs
+
+#Getting the BAM/CRAM file for this array task from the cram.list, using SLURM_ARRAY_TASK_ID to index into the list. Default to 1 if not set...
+TASK_ID="${SLURM_ARRAY_TASK_ID:-1}"
+CRAM=$(sed -n "${TASK_ID}p" "$CRAM_LIST")
+if [ -z "${CRAM}" ]; then
+  echo "ERROR: No CRAM found for the task ${TASK_ID}. Check CRAM_LIST and array range." >&2
+  exit 1
+fi
+if [ ! -r "${CRAM}" ]; then
+  echo "ERROR: CRAM not readable: ${CRAM}" >&2
+  exit 1
+fi
+
+# Sample ID from filename 
+# I really do not know how the GTEx BAM/cram files are named, but I am assuming they have a .bam/cram extension and that the sample ID can be extracted by removing the .bam suffix. You may need to adjust this if the naming convention is different.
+#edit if you want different parsing/ but we want the same name to be used so that we can match it to metadata and expression data later
+#SAMPLE=$(basename "$CRAM" | sed 's/\.cram$//')
+SAMPLE=$(basename "$CRAM" .cram) #cram filename without the .cram / can adjust when we know how the gtex cram files are named 
+
+
+#Retrieving mean depth across tspy1 and then mean depth across 4 normalization stategies: ddx3y, autosomes, mapped reads, and xdr 
+
+# ---- mean depth over TSPY1 BED (includes zeros) ----
+# Using samtools depth to get per-base depth across the TSPY1 regions defined in the BED file, and then calculating the mean depth including zeros (i.e., positions with no coverage) by dividing the total depth by the length of the regions.
+# The -a option in samtools depth = all positions in the BED regions are included, even those with zero coverage. 
+# The awk command sums the depth across all positions and divides by the total length of the regions (calculated as the sum of end - start for each region in the BED file) to get the mean depth.
+mean_depth_tspy1=$(
+  samtools depth -a --reference "$REF_FASTA" -b "$BED_TSPY1" "$CRAM" \
+  | awk '{sum+=$3; n++} END{if(n>0) printf "%.6f", sum/n; else printf "NA"}'
+)
+
+
+# ---- Normalization options --------
+
+# ---- mean depth over DDX3Y BED (includes zeros) ----
+# Same approach as for TSPY1, but using the DDX3Y BED file to calculate the mean depth across the DDX3Y region on the YCHR (single copy Y proxy). This will be used for normalization later.
+mean_depth_ddx3y=$(
+  samtools depth -a --reference "$REF_FASTA" -b "$BED_DDX3Y" "$CRAM" \
+  | awk '{sum+=$3; n++} END{if(n>0) printf "%.6f", sum/n; else printf "NA"}'
+)
+
+# ---- mean depth over autosomes BED (includes zeros) ----
+# Same approach as for TSPY1, but using the autosomes BED file to calculate the mean depth across the autosomes CHR1-22. This will be used for normalization later.
+autosome_mean_depth=$(
+  samtools depth -a --reference "$REF_FASTA" -b "$BED_AUTOSOMES" "$CRAM" \
+  | awk '{sum+=$3; n++} END{if(n>0) printf "%.6f", sum/n; else printf "NA"}'
+)
+
+# ---- mapped reads ----
+# Using samtools idxstats to get the total number of mapped reads in the BAM file, which is the sum of the mapped reads across all chromosomes (column 3 of idxstats output). This will be used for normalization later.
+mapped_reads=$(
+  samtools idxstats "$CRAM" | awk '{sum+=$3} END{print sum+0}'
+)
+
+# ---- xdr (mean depth across XDR regions on Y chr using bedcov: marcs request) ----
+# bedcov output: chrY start end sumDepth
+# mean XDR depth = mean(sumDepth)/1000 for 1kb windows
+xdr_marc_depth=$(
+  samtools bedcov -Q "$XDR_MIN_MQ" --reference "$REF_FASTA" "$BED_XDR_WIN" "$CRAM" \
+  | awk '{sum+=$4; n++} END{if(n>0) printf "%.6f", (sum/n)/1000.0; else printf "NA"}'
+)
+
+
+# ----- Normalization calulations: -----
+# Dividing the mean depth over TSPY1 by each of the normalization factors (ddx3y, autosomes, mapped reads, xdr)
+#if the normalization factor is NA or zero, then the normalized value will be set to NA to avoid division errors 
+
+tspy1_norm_y="NA"
+if [ "$mean_depth_ddx3y" != "NA" ] && awk "BEGIN{exit !($mean_depth_ddx3y>0)}"; then
+  tspy1_norm_y=$(awk "BEGIN{printf \"%.6f\", $mean_depth_tspy1/$mean_depth_ddx3y}")
+fi
+
+tspy1_per_Mreads="NA"
+if [ "$mapped_reads" -gt 0 ] && [ "$mean_depth_tspy1" != "NA" ]; then
+  tspy1_per_Mreads=$(awk "BEGIN{printf \"%.6f\", $mean_depth_tspy1/($mapped_reads/1000000.0)}")
+fi
+
+tspy1_norm_genome="NA"
+if [ "$autosome_mean_depth" != "NA" ] && awk "BEGIN{exit !($autosome_mean_depth>0)}"; then
+  tspy1_norm_genome=$(awk "BEGIN{printf \"%.6f\", $mean_depth_tspy1/$autosome_mean_depth}")
+fi
+
+tspy1_norm_xdr="NA"
+if [ "$xdr_marc_depth" != "NA" ] && awk "BEGIN{exit !($xdr_marc_depth>0)}"; then
+  tspy1_norm_xdr=$(awk "BEGIN{printf \"%.6f\", $mean_depth_tspy1/$xdr_marc_depth}")
+fi
+
+ 
+#Write one tsv for this sample / per sample with the mean depth and normalized values. 
+#The columns will be: Sample, Mean_Depth_TSPY1, mean depth ddxy3, mapped reads, mean depth autosomes, TSPY1_norm_DDX3Y, TSPY1_per_MappedReads, TSPY1_norm_Autosomes
+# The output file will be named based on the sample ID and saved in the OUTPUT_DIR.
+out_tsv="${OUTPUT_DIR}/${SAMPLE}.tspy_depth_metrics.tsv"
+
+
+echo -e "sample\tcram_path\tmean_depth_tspy1\tmean_depth_ddx3y\tautosome_mean_depth\tmapped_reads\txdr_marc_depth\ttspy1_norm_y\ttspy1_per_Mreads\ttspy1_norm_genome\ttspy1_norm_xdr" > "$out_tsv" #titles / header for the columns
+echo -e "${SAMPLE}\t${CRAM}\t${mean_depth_tspy1}\t${mean_depth_ddx3y}\t${autosome_mean_depth}\t${mapped_reads}\t${xdr_marc_depth}\t${tspy1_norm_y}\t${tspy1_per_Mreads}\t${tspy1_norm_genome}\t${tspy1_norm_xdr}" >> "$out_tsv"
+
+
+#combine all the individual sample TSVs into one master table after all the jobs are done 
+#cd depth_outputs/
+#head -n 1 *.tspy_depth_metrics.tsv | head -n 1 > GTEX_TSPY_depth_metrics_master.tsv
+#tail -n +2 -q *.tspy_depth_metrics.tsv >> GTEX_TSPY_depth_metrics_master.tsv
