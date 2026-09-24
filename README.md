@@ -34,16 +34,13 @@ Measure short-read variant accuracy within the regions retained by each mask.
 ### Analysis
 
 Short-read variant calls were used to construct sample-specific Y chromosome pseudogenomes. These were compared with the corresponding Verkko2 Y chromosome assemblies.
-Bases annotated as `ERRBASE` in the sample-specific Verkko2 assemblies were masked before comparison so that low-confidence assembly positions were not included in the QV calculation. HG002 was excluded upstream.
+Bases annotated as `ERRBASE` in the sample-specific Verkko2 assemblies were masked before comparison so that low-confidence assembly positions were not included in the QV calculation. HG002 was excluded.
 
 QV is calculated from discrepancy rate:
 `QV = -10 × log10(discrepancies / aligned bases)`
 
 For mean QV, discrepancies and aligned bases are pooled before calculating QV rather than averaging individual QV values:
 `QV_mean = -10 × log10(sum(discrepancies) / sum(aligned bases))`
-
-The current summary input is:
-`summary_category_stats_minalign1000_refannot_errorbase_masking_no_HG002.txt`
 
 Additional plotting:
 - categories with insufficient aligned sequence are not assigned a QV
