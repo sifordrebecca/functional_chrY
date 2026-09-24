@@ -12,7 +12,7 @@ Sequence classes are based on the T2T-CHM13v2Y annotation and are summarized as:
 ---
 ## Callable Regions
 Compare how much Y chromosome sequence is retained by each global callable-region mask.
-See 'CallableRegions_and_QV.R'. and 'callable_mask_overlap_euler.R'.
+See `CallableRegions_and_QV.R`. and `callable_mask_overlap_euler.R`.
 
 ### Analysis
 Each mask was intersected with the T2T-CHM13v2Y sequence-class annotation. For each sequence class, the analysis calculates:
@@ -31,7 +31,7 @@ The heatmap displays callable fraction by color and retained sequence in Mb with
 ---
 ## QV
 Measure short-read variant accuracy within the regions retained by each mask.
-See 'CallableRegions_and_QV.R'.
+See `CallableRegions_and_QV.R`.
 
 ### Analysis
 
