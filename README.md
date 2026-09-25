@@ -1,6 +1,6 @@
 # Y Chromosome Callable Region and QV Analyses and TSPY Analyses
 
-This repository contains scripts used to compare three global Y chromosome callable-region masks and evaluate short-read variant accuracy across T2T-CHM13v2Y sequence classes.
+This repository contains scripts used to compare three global Y chromosome callable-region masks and evaluate short-read variant accuracy across T2T-CHM13v2Y sequence classes. See preprint here for this work: https://www.biorxiv.org/content/10.64898/2026.06.03.729890v1
 The three masks compared are:
 - **Short read - GRCh37**: Poznik et al. callable Y mask
 - **Short read - T2T**: T2T-CHM13v2Y short-read-based mask
